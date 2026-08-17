@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_Multichannel_Autoapproval"
+  targetNamespace="http://example.org/insurance/autoapproval/multichannel">
+  <process id="Process_Multichannel_Autoapproval" name="Техническая схема автосогласования медуслуг: МП, почта, интеграция" isExecutable="false">
+    <documentation>Проверки выполняются для каждой услуги. Первая непройденная проверка формирует отказ по этой услуге. Для СпецДМС IMAN рассчитывает лимит: при доступном лимите обработка продолжается, при исчерпанном формируется отказ. Сочетание красный клиент + красное ЛПУ не прерывает обработку агентом: устанавливается флаг повышенного внимания, а при согласовании услуги в АИС выводится специальная пометка сотруднику. Результат по каждой услуге записывается в поля вкладки «УСЛУГИ ЭП». После корректировки сотрудником весь набор проверок запускается повторно.</documentation>
+
+    <laneSet id="LaneSet_Main">
+      <lane id="Lane_Channels" name="Каналы входа">
+        <flowNodeRef>Start_Request</flowNodeRef>
+        <flowNodeRef>Gateway_Channel</flowNodeRef>
+        <flowNodeRef>Receive_Mobile</flowNodeRef>
+        <flowNodeRef>Receive_Email</flowNodeRef>
+        <flowNodeRef>Receive_Integration</flowNodeRef>
+        <flowNodeRef>Gateway_Documents_Merge</flowNodeRef>
+      </lane>
+      <lane id="Lane_Orchestrator" name="Сервис-оркестратор / API">
+        <flowNodeRef>Send_To_IngoRead</flowNodeRef>
+        <flowNodeRef>Receive_Integration_JSON</flowNodeRef>
+        <flowNodeRef>Gateway_JSON_Merge</flowNodeRef>
+        <flowNodeRef>Validate_Normalize_JSON</flowNodeRef>
+        <flowNodeRef>Call_Oracle</flowNodeRef>
+        <flowNodeRef>Gateway_Franchise</flowNodeRef>
+        <flowNodeRef>Call_IMAN</flowNodeRef>
+        <flowNodeRef>Gateway_Output_Merge</flowNodeRef>
+        <flowNodeRef>Build_Output_JSON</flowNodeRef>
+        <flowNodeRef>Resend_To_Agent</flowNodeRef>
+      </lane>
+      <lane id="Lane_AIS" name="АИС">
+        <flowNodeRef>AIS_Upsert_Case</flowNodeRef>
+        <flowNodeRef>AIS_Save_EP</flowNodeRef>
+      </lane>
+      <lane id="Lane_IngoRead" name="IngoRead">
+        <flowNodeRef>IngoRead_OCR</flowNodeRef>
+        <flowNodeRef>IngoRead_Build_JSON</flowNodeRef>
+      </lane>
+      <lane id="Lane_Oracle" name="Oracle">
+        <flowNodeRef>Oracle_Check_Franchise</flowNodeRef>
+      </lane>
+      <lane id="Lane_IMAN" name="IMAN / агент / базы знаний">
+        <flowNodeRef>IMAN_LPU_Mode</flowNodeRef>
+        <flowNodeRef>IMAN_Check_SpecialDMS</flowNodeRef>
+        <flowNodeRef>Gateway_SpecialDMS</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Color</flowNodeRef>
+        <flowNodeRef>Gateway_Color</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Program</flowNodeRef>
+        <flowNodeRef>Gateway_Program</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Risks</flowNodeRef>
+        <flowNodeRef>Gateway_Risk</flowNodeRef>
+        <flowNodeRef>IMAN_Calc_Limit</flowNodeRef>
+        <flowNodeRef>Gateway_Limit</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Protocol_Age</flowNodeRef>
+        <flowNodeRef>Gateway_Protocol_Age</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Exclusions</flowNodeRef>
+        <flowNodeRef>Gateway_Exclusions</flowNodeRef>
+        <flowNodeRef>IMAN_Check_Clinical</flowNodeRef>
+        <flowNodeRef>Gateway_Clinical</flowNodeRef>
+        <flowNodeRef>IMAN_Medical_Expertise</flowNodeRef>
+        <flowNodeRef>IMAN_Build_Refusal</flowNodeRef>
+        <flowNodeRef>IMAN_Set_Attention_Flag</flowNodeRef>
+      </lane>
+      <lane id="Lane_Employee" name="Сотрудник сопровождения / ручной контроль">
+        <flowNodeRef>Employee_Review</flowNodeRef>
+        <flowNodeRef>Gateway_Correction</flowNodeRef>
+        <flowNodeRef>Employee_Edit_Request</flowNodeRef>
+        <flowNodeRef>End_Processed</flowNodeRef>
+      </lane>
+    </laneSet>
+
+    <startEvent id="Start_Request" name="Поступило обращение" />
+    <exclusiveGateway id="Gateway_Channel" name="Канал входа?" />
+    <receiveTask id="Receive_Mobile" name="МП: обращение с протоколом">
+      <documentation>Мобильное приложение передает обращение и файл медицинского протокола.</documentation>
+    </receiveTask>
+    <receiveTask id="Receive_Email" name="Почта: обращение с протоколом">
+      <documentation>Почтовое обращение без ручной подготовки JSON сразу направляется в IngoRead.</documentation>
+    </receiveTask>
+    <receiveTask id="Receive_Integration" name="Интеграция: готовые поля JSON">
+      <documentation>Интеграционный канал сразу передает структурированные поля. IngoRead не вызывается.</documentation>
+    </receiveTask>
+    <exclusiveGateway id="Gateway_Documents_Merge" name="Протокол получен" />
+
+    <serviceTask id="Send_To_IngoRead" name="Передать протокол в IngoRead" />
+    <serviceTask id="Receive_Integration_JSON" name="Принять JSON по API" />
+    <exclusiveGateway id="Gateway_JSON_Merge" name="JSON получен" />
+    <serviceTask id="Validate_Normalize_JSON" name="Проверить обязательные поля и нормализовать JSON">
+      <documentation>Вход для агента: diagnosis, complaints, services[], lpu.name, lpu.type, lpu.color, client_color, program, program_code, gender, patient_name_patronymic, risks[]. Для выполнения процесса также обязательны request_id, insured_id и protocol_date, если есть протокол.</documentation>
+    </serviceTask>
+    <serviceTask id="Call_Oracle" name="Запросить проверку франшизы в Oracle" />
+    <exclusiveGateway id="Gateway_Franchise" name="Есть задолженность по франшизе?" />
+    <serviceTask id="Call_IMAN" name="Передать нормализованный JSON в IMAN" />
+    <exclusiveGateway id="Gateway_Output_Merge" name="Решение сформировано" />
+    <serviceTask id="Build_Output_JSON" name="Сформировать выходной JSON и пометки по услугам">
+      <documentation>Для каждой услуги: service, decision, decision_reason, personalized_refusal_reason. Персонализированный текст используется только при отказе. Если услуга согласована и установлен флаг red client + red LPU, передаются attention_required = true и attention_label = «ОСОБОЕ ВНИМАНИЕ».</documentation>
+    </serviceTask>
+    <serviceTask id="Resend_To_Agent" name="Повторно передать запрос агенту" />
+
+    <serviceTask id="AIS_Upsert_Case" name="Создать / обновить обращение и сохранить входной JSON" />
+    <serviceTask id="AIS_Save_EP" name="Записать ответ и пометки во вкладку «УСЛУГИ ЭП»">
+      <documentation>Записывается решение по услуге, обоснование решения и персонализированная причина отказа. Для согласованной услуги с красным клиентом и красным ЛПУ отображается пометка «ОСОБОЕ ВНИМАНИЕ».</documentation>
+    </serviceTask>
+
+    <serviceTask id="IngoRead_OCR" name="Распознать медицинский протокол" />
+    <serviceTask id="IngoRead_Build_JSON" name="Извлечь и структурировать поля JSON" />
+
+    <businessRuleTask id="Oracle_Check_Franchise" name="Проверить задолженность по франшизе">
+      <documentation>Если у застрахованного есть задолженность по франшизе, услуга получает отказ.</documentation>
+    </businessRuleTask>
+
+    <businessRuleTask id="IMAN_LPU_Mode" name="Определить тип ЛПУ и режим контроля">
+      <documentation>Для lpu.type = special включается признак усиленного внимания при последующих проверках.</documentation>
+    </businessRuleTask>
+    <businessRuleTask id="IMAN_Check_SpecialDMS" name="Проверить СпецДМС и рассчитать доступный лимит">
+      <documentation>Если кейс относится к СпецДМС, IMAN рассчитывает остаток лимита по условиям обслуживания и выбранному ЛПУ. Для обычного ДМС проверка считается неприменимой и процесс продолжается.</documentation>
+    </businessRuleTask>
+    <exclusiveGateway id="Gateway_SpecialDMS" name="Лимит СпецДМС исчерпан?" />
+    <businessRuleTask id="IMAN_Check_Color" name="Проверить цвета клиента и ЛПУ" />
+    <exclusiveGateway id="Gateway_Color" name="Нужен флаг повышенного внимания?" />
+    <serviceTask id="IMAN_Set_Attention_Flag" name="Установить флаг: красный клиент + красное ЛПУ">
+      <documentation>Флаг не останавливает проверки и не переводит кейс к врачу. Если итоговая услуга будет согласована, флаг преобразуется в пометку «ОСОБОЕ ВНИМАНИЕ» для сотрудника.</documentation>
+    </serviceTask>
+    <businessRuleTask id="IMAN_Check_Program" name="Проверить доступность услуги по программе" />
+    <exclusiveGateway id="Gateway_Program" name="Услуга доступна?" />
+    <businessRuleTask id="IMAN_Check_Risks" name="Проверить услугу по рискам застрахованного" />
+    <exclusiveGateway id="Gateway_Risk" name="Результат проверки риска?" />
+    <businessRuleTask id="IMAN_Calc_Limit" name="Рассчитать количественное ограничение">
+      <documentation>Пример: проверить использованное количество массажей относительно лимита 20 в год.</documentation>
+    </businessRuleTask>
+    <exclusiveGateway id="Gateway_Limit" name="Лимит не исчерпан?" />
+    <businessRuleTask id="IMAN_Check_Protocol_Age" name="Проверить срок медицинского протокола" />
+    <exclusiveGateway id="Gateway_Protocol_Age" name="Протокол не старше 30 дней?" />
+    <businessRuleTask id="IMAN_Check_Exclusions" name="Проверить исключения из программы" />
+    <exclusiveGateway id="Gateway_Exclusions" name="Услуга в исключениях?" />
+    <businessRuleTask id="IMAN_Check_Clinical" name="Проверить клинические рекомендации">
+      <documentation>Проверяются медицинская обоснованность и этапность услуги.</documentation>
+    </businessRuleTask>
+    <exclusiveGateway id="Gateway_Clinical" name="Соответствует клиническим рекомендациям?" />
+    <businessRuleTask id="IMAN_Medical_Expertise" name="Провести медэкспертизу и сформировать решение" />
+    <serviceTask id="IMAN_Build_Refusal" name="Сформировать отказ по услуге">
+      <documentation>Фиксируется непройденная проверка, обоснование и персонализированная причина отказа с именем и отчеством.</documentation>
+    </serviceTask>
+
+    <userTask id="Employee_Review" name="Проверить результат и услуги с пометкой в «УСЛУГИ ЭП»" />
+    <exclusiveGateway id="Gateway_Correction" name="Нужна корректировка запроса?" />
+    <userTask id="Employee_Edit_Request" name="Скорректировать данные запроса" />
+    <endEvent id="End_Processed" name="Обработка завершена" />
+
+    <textAnnotation id="Annotation_Input_JSON">
+      <text>ВХОД АИС → АГЕНТ
+diagnosis; complaints; services[];
+lpu { name, type: regular|special, color: red|green };
+client_color: red|green; program; program_code; gender;
+patient_name_patronymic; risks[];
+тех. поля: request_id, insured_id, protocol_date, source</text>
+    </textAnnotation>
+    <association id="Association_Input" sourceRef="Validate_Normalize_JSON" targetRef="Annotation_Input_JSON" />
+    <textAnnotation id="Annotation_Output_JSON">
+      <text>ВЫХОД АГЕНТА → «УСЛУГИ ЭП»
+services_decision[]:
+service; decision;
+decision_reason;
+personalized_refusal_reason;
+attention_required; attention_label — только для согласованной
+услуги при красном клиенте + красном ЛПУ</text>
+    </textAnnotation>
+    <association id="Association_Output" sourceRef="Build_Output_JSON" targetRef="Annotation_Output_JSON" />
+    <textAnnotation id="Annotation_Per_Service">
+      <text>Все проверки выполняются по каждой услуге.
+Первая непройденная проверка → отказ по этой услуге.
+Спец ЛПУ → усиленный контроль.
+СпецДМС: доступный лимит → дальше; исчерпан → отказ.
+Красный клиент + красное ЛПУ → флаг; агент продолжает проверки.</text>
+    </textAnnotation>
+    <association id="Association_Per_Service" sourceRef="IMAN_LPU_Mode" targetRef="Annotation_Per_Service" />
+
+    <sequenceFlow id="Flow_01" sourceRef="Start_Request" targetRef="Gateway_Channel" />
+    <sequenceFlow id="Flow_02" name="МП" sourceRef="Gateway_Channel" targetRef="Receive_Mobile" />
+    <sequenceFlow id="Flow_03" name="Почта" sourceRef="Gateway_Channel" targetRef="Receive_Email" />
+    <sequenceFlow id="Flow_04" name="Интеграция" sourceRef="Gateway_Channel" targetRef="Receive_Integration" />
+    <sequenceFlow id="Flow_05" sourceRef="Receive_Mobile" targetRef="Gateway_Documents_Merge" />
+    <sequenceFlow id="Flow_06" sourceRef="Receive_Email" targetRef="Gateway_Documents_Merge" />
+    <sequenceFlow id="Flow_07" sourceRef="Gateway_Documents_Merge" targetRef="Send_To_IngoRead" />
+    <sequenceFlow id="Flow_08" sourceRef="Receive_Integration" targetRef="Receive_Integration_JSON" />
+    <sequenceFlow id="Flow_09" sourceRef="Send_To_IngoRead" targetRef="IngoRead_OCR" />
+    <sequenceFlow id="Flow_10" sourceRef="IngoRead_OCR" targetRef="IngoRead_Build_JSON" />
+    <sequenceFlow id="Flow_11" sourceRef="IngoRead_Build_JSON" targetRef="Gateway_JSON_Merge" />
+    <sequenceFlow id="Flow_12" name="Готовый JSON, без IngoRead" sourceRef="Receive_Integration_JSON" targetRef="Gateway_JSON_Merge" />
+    <sequenceFlow id="Flow_13" sourceRef="Gateway_JSON_Merge" targetRef="Validate_Normalize_JSON" />
+    <sequenceFlow id="Flow_14" sourceRef="Validate_Normalize_JSON" targetRef="AIS_Upsert_Case" />
+    <sequenceFlow id="Flow_15" sourceRef="AIS_Upsert_Case" targetRef="Call_Oracle" />
+    <sequenceFlow id="Flow_16" sourceRef="Call_Oracle" targetRef="Oracle_Check_Franchise" />
+    <sequenceFlow id="Flow_17" sourceRef="Oracle_Check_Franchise" targetRef="Gateway_Franchise" />
+    <sequenceFlow id="Flow_18" name="Да → отказ" sourceRef="Gateway_Franchise" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_19" name="Нет" sourceRef="Gateway_Franchise" targetRef="Call_IMAN" />
+    <sequenceFlow id="Flow_20" sourceRef="Call_IMAN" targetRef="IMAN_LPU_Mode" />
+    <sequenceFlow id="Flow_21" sourceRef="IMAN_LPU_Mode" targetRef="IMAN_Check_SpecialDMS" />
+    <sequenceFlow id="Flow_22" sourceRef="IMAN_Check_SpecialDMS" targetRef="Gateway_SpecialDMS" />
+    <sequenceFlow id="Flow_23" name="Да, лимит исчерпан → отказ" sourceRef="Gateway_SpecialDMS" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_24" name="Нет / лимит доступен / не СпецДМС" sourceRef="Gateway_SpecialDMS" targetRef="IMAN_Check_Color" />
+    <sequenceFlow id="Flow_25" sourceRef="IMAN_Check_Color" targetRef="Gateway_Color" />
+    <sequenceFlow id="Flow_26" name="Да → установить флаг" sourceRef="Gateway_Color" targetRef="IMAN_Set_Attention_Flag" />
+    <sequenceFlow id="Flow_27" name="Нет" sourceRef="Gateway_Color" targetRef="IMAN_Check_Program" />
+    <sequenceFlow id="Flow_28" sourceRef="IMAN_Check_Program" targetRef="Gateway_Program" />
+    <sequenceFlow id="Flow_29" name="Нет → отказ" sourceRef="Gateway_Program" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_30" name="Да" sourceRef="Gateway_Program" targetRef="IMAN_Check_Risks" />
+    <sequenceFlow id="Flow_31" sourceRef="IMAN_Check_Risks" targetRef="Gateway_Risk" />
+    <sequenceFlow id="Flow_32" name="Входит: прямой отказ" sourceRef="Gateway_Risk" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_33" name="Не входит" sourceRef="Gateway_Risk" targetRef="IMAN_Check_Protocol_Age" />
+    <sequenceFlow id="Flow_34" name="Сложный количественный риск" sourceRef="Gateway_Risk" targetRef="IMAN_Calc_Limit" />
+    <sequenceFlow id="Flow_35" sourceRef="IMAN_Calc_Limit" targetRef="Gateway_Limit" />
+    <sequenceFlow id="Flow_36" name="Нет → отказ" sourceRef="Gateway_Limit" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_37" name="Да" sourceRef="Gateway_Limit" targetRef="IMAN_Check_Protocol_Age" />
+    <sequenceFlow id="Flow_38" sourceRef="IMAN_Check_Protocol_Age" targetRef="Gateway_Protocol_Age" />
+    <sequenceFlow id="Flow_39" name="Нет, более 30 дней → отказ" sourceRef="Gateway_Protocol_Age" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_40" name="Да / протокол не требуется" sourceRef="Gateway_Protocol_Age" targetRef="IMAN_Check_Exclusions" />
+    <sequenceFlow id="Flow_41" sourceRef="IMAN_Check_Exclusions" targetRef="Gateway_Exclusions" />
+    <sequenceFlow id="Flow_42" name="Да → отказ" sourceRef="Gateway_Exclusions" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_43" name="Нет" sourceRef="Gateway_Exclusions" targetRef="IMAN_Check_Clinical" />
+    <sequenceFlow id="Flow_44" sourceRef="IMAN_Check_Clinical" targetRef="Gateway_Clinical" />
+    <sequenceFlow id="Flow_45" name="Нет → отказ" sourceRef="Gateway_Clinical" targetRef="IMAN_Build_Refusal" />
+    <sequenceFlow id="Flow_46" name="Да" sourceRef="Gateway_Clinical" targetRef="IMAN_Medical_Expertise" />
+    <sequenceFlow id="Flow_47" sourceRef="IMAN_Medical_Expertise" targetRef="Gateway_Output_Merge" />
+    <sequenceFlow id="Flow_48" name="Продолжить проверки в агенте" sourceRef="IMAN_Set_Attention_Flag" targetRef="IMAN_Check_Program" />
+    <sequenceFlow id="Flow_50" sourceRef="IMAN_Build_Refusal" targetRef="Gateway_Output_Merge" />
+    <sequenceFlow id="Flow_51" sourceRef="Gateway_Output_Merge" targetRef="Build_Output_JSON" />
+    <sequenceFlow id="Flow_52" sourceRef="Build_Output_JSON" targetRef="AIS_Save_EP" />
+    <sequenceFlow id="Flow_53" sourceRef="AIS_Save_EP" targetRef="Employee_Review" />
+    <sequenceFlow id="Flow_54" sourceRef="Employee_Review" targetRef="Gateway_Correction" />
+    <sequenceFlow id="Flow_55" name="Нет" sourceRef="Gateway_Correction" targetRef="End_Processed" />
+    <sequenceFlow id="Flow_56" name="Да" sourceRef="Gateway_Correction" targetRef="Employee_Edit_Request" />
+    <sequenceFlow id="Flow_57" sourceRef="Employee_Edit_Request" targetRef="Resend_To_Agent" />
+    <sequenceFlow id="Flow_58" name="Повторный запуск всех проверок" sourceRef="Resend_To_Agent" targetRef="Validate_Normalize_JSON" />
+
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Multichannel_Autoapproval">
+    <bpmndi:BPMNPlane id="BPMNPlane_Multichannel_Autoapproval" bpmnElement="Process_Multichannel_Autoapproval">
+      <bpmndi:BPMNShape id="Lane_Channels_di" bpmnElement="Lane_Channels" isHorizontal="true">
+        <dc:Bounds x="40" y="40" width="7960" height="200" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Orchestrator_di" bpmnElement="Lane_Orchestrator" isHorizontal="true">
+        <dc:Bounds x="40" y="240" width="7960" height="190" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_AIS_di" bpmnElement="Lane_AIS" isHorizontal="true">
+        <dc:Bounds x="40" y="430" width="7960" height="140" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_IngoRead_di" bpmnElement="Lane_IngoRead" isHorizontal="true">
+        <dc:Bounds x="40" y="570" width="7960" height="140" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Oracle_di" bpmnElement="Lane_Oracle" isHorizontal="true">
+        <dc:Bounds x="40" y="710" width="7960" height="140" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_IMAN_di" bpmnElement="Lane_IMAN" isHorizontal="true">
+        <dc:Bounds x="40" y="850" width="7960" height="470" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Employee_di" bpmnElement="Lane_Employee" isHorizontal="true">
+        <dc:Bounds x="40" y="1320" width="7960" height="170" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Start_Request_di" bpmnElement="Start_Request">
+        <dc:Bounds x="100" y="110" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="76" y="148" width="86" height="28" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Channel_di" bpmnElement="Gateway_Channel" isMarkerVisible="true">
+        <dc:Bounds x="190" y="103" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="177" y="76" width="76" height="18" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Receive_Mobile_di" bpmnElement="Receive_Mobile"><dc:Bounds x="300" y="50" width="200" height="55" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Receive_Email_di" bpmnElement="Receive_Email"><dc:Bounds x="300" y="115" width="200" height="55" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Receive_Integration_di" bpmnElement="Receive_Integration"><dc:Bounds x="300" y="180" width="200" height="55" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Documents_Merge_di" bpmnElement="Gateway_Documents_Merge" isMarkerVisible="true">
+        <dc:Bounds x="560" y="100" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Send_To_IngoRead_di" bpmnElement="Send_To_IngoRead"><dc:Bounds x="670" y="275" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Receive_Integration_JSON_di" bpmnElement="Receive_Integration_JSON"><dc:Bounds x="670" y="350" width="200" height="60" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_JSON_Merge_di" bpmnElement="Gateway_JSON_Merge" isMarkerVisible="true"><dc:Bounds x="1440" y="300" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Validate_Normalize_JSON_di" bpmnElement="Validate_Normalize_JSON"><dc:Bounds x="1540" y="275" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Call_Oracle_di" bpmnElement="Call_Oracle"><dc:Bounds x="2030" y="275" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Franchise_di" bpmnElement="Gateway_Franchise" isMarkerVisible="true">
+        <dc:Bounds x="2290" y="300" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2260" y="260" width="110" height="36" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Call_IMAN_di" bpmnElement="Call_IMAN"><dc:Bounds x="2400" y="275" width="190" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Output_Merge_di" bpmnElement="Gateway_Output_Merge" isMarkerVisible="true"><dc:Bounds x="6200" y="300" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Build_Output_JSON_di" bpmnElement="Build_Output_JSON"><dc:Bounds x="6310" y="275" width="230" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Resend_To_Agent_di" bpmnElement="Resend_To_Agent"><dc:Bounds x="7550" y="275" width="220" height="65" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="AIS_Upsert_Case_di" bpmnElement="AIS_Upsert_Case"><dc:Bounds x="1790" y="467" width="220" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="AIS_Save_EP_di" bpmnElement="AIS_Save_EP"><dc:Bounds x="6600" y="467" width="230" height="65" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="IngoRead_OCR_di" bpmnElement="IngoRead_OCR"><dc:Bounds x="940" y="607" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IngoRead_Build_JSON_di" bpmnElement="IngoRead_Build_JSON"><dc:Bounds x="1180" y="607" width="210" height="65" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Oracle_Check_Franchise_di" bpmnElement="Oracle_Check_Franchise"><dc:Bounds x="2030" y="747" width="220" height="65" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="IMAN_LPU_Mode_di" bpmnElement="IMAN_LPU_Mode"><dc:Bounds x="2640" y="880" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_SpecialDMS_di" bpmnElement="IMAN_Check_SpecialDMS"><dc:Bounds x="2890" y="880" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_SpecialDMS_di" bpmnElement="Gateway_SpecialDMS" isMarkerVisible="true"><dc:Bounds x="3140" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Color_di" bpmnElement="IMAN_Check_Color"><dc:Bounds x="3240" y="880" width="190" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Color_di" bpmnElement="Gateway_Color" isMarkerVisible="true">
+        <dc:Bounds x="3470" y="887" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="3438" y="840" width="116" height="40" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Program_di" bpmnElement="IMAN_Check_Program"><dc:Bounds x="3580" y="880" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Program_di" bpmnElement="Gateway_Program" isMarkerVisible="true"><dc:Bounds x="3820" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Risks_di" bpmnElement="IMAN_Check_Risks"><dc:Bounds x="3930" y="880" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Risk_di" bpmnElement="Gateway_Risk" isMarkerVisible="true"><dc:Bounds x="4180" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Calc_Limit_di" bpmnElement="IMAN_Calc_Limit"><dc:Bounds x="4310" y="1035" width="220" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Limit_di" bpmnElement="Gateway_Limit" isMarkerVisible="true"><dc:Bounds x="4570" y="1042" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Protocol_Age_di" bpmnElement="IMAN_Check_Protocol_Age"><dc:Bounds x="4710" y="880" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Protocol_Age_di" bpmnElement="Gateway_Protocol_Age" isMarkerVisible="true"><dc:Bounds x="4960" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Exclusions_di" bpmnElement="IMAN_Check_Exclusions"><dc:Bounds x="5070" y="880" width="200" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Exclusions_di" bpmnElement="Gateway_Exclusions" isMarkerVisible="true"><dc:Bounds x="5310" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Check_Clinical_di" bpmnElement="IMAN_Check_Clinical"><dc:Bounds x="5420" y="880" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Clinical_di" bpmnElement="Gateway_Clinical" isMarkerVisible="true"><dc:Bounds x="5670" y="887" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Medical_Expertise_di" bpmnElement="IMAN_Medical_Expertise"><dc:Bounds x="5790" y="880" width="230" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Build_Refusal_di" bpmnElement="IMAN_Build_Refusal"><dc:Bounds x="5790" y="1070" width="230" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="IMAN_Set_Attention_Flag_di" bpmnElement="IMAN_Set_Attention_Flag"><dc:Bounds x="3540" y="1035" width="240" height="65" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Employee_Review_di" bpmnElement="Employee_Review"><dc:Bounds x="6850" y="1360" width="210" height="65" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Correction_di" bpmnElement="Gateway_Correction" isMarkerVisible="true"><dc:Bounds x="7100" y="1367" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Employee_Edit_Request_di" bpmnElement="Employee_Edit_Request"><dc:Bounds x="7220" y="1420" width="220" height="60" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_Processed_di" bpmnElement="End_Processed"><dc:Bounds x="7370" y="1369" width="36" height="36" /><bpmndi:BPMNLabel><dc:Bounds x="7339" y="1339" width="98" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="Annotation_Input_JSON_di" bpmnElement="Annotation_Input_JSON"><dc:Bounds x="1510" y="350" width="270" height="72" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Annotation_Output_JSON_di" bpmnElement="Annotation_Output_JSON"><dc:Bounds x="6290" y="345" width="290" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Annotation_Per_Service_di" bpmnElement="Annotation_Per_Service"><dc:Bounds x="2640" y="1010" width="300" height="110" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="Association_Input_di" bpmnElement="Association_Input"><di:waypoint x="1645" y="340" /><di:waypoint x="1645" y="350" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Association_Output_di" bpmnElement="Association_Output"><di:waypoint x="6425" y="340" /><di:waypoint x="6425" y="345" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Association_Per_Service_di" bpmnElement="Association_Per_Service"><di:waypoint x="2745" y="945" /><di:waypoint x="2745" y="1010" /></bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="Flow_01_di" bpmnElement="Flow_01"><di:waypoint x="136" y="128" /><di:waypoint x="190" y="128" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_02_di" bpmnElement="Flow_02"><di:waypoint x="215" y="103" /><di:waypoint x="215" y="78" /><di:waypoint x="300" y="78" /><bpmndi:BPMNLabel><dc:Bounds x="247" y="58" width="20" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_03_di" bpmnElement="Flow_03"><di:waypoint x="240" y="128" /><di:waypoint x="270" y="128" /><di:waypoint x="270" y="143" /><di:waypoint x="300" y="143" /><bpmndi:BPMNLabel><dc:Bounds x="241" y="135" width="40" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_04_di" bpmnElement="Flow_04"><di:waypoint x="215" y="153" /><di:waypoint x="215" y="208" /><di:waypoint x="300" y="208" /><bpmndi:BPMNLabel><dc:Bounds x="229" y="188" width="69" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_05_di" bpmnElement="Flow_05"><di:waypoint x="500" y="78" /><di:waypoint x="535" y="78" /><di:waypoint x="535" y="125" /><di:waypoint x="560" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_06_di" bpmnElement="Flow_06"><di:waypoint x="500" y="143" /><di:waypoint x="535" y="143" /><di:waypoint x="535" y="125" /><di:waypoint x="560" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_07_di" bpmnElement="Flow_07"><di:waypoint x="585" y="150" /><di:waypoint x="585" y="308" /><di:waypoint x="670" y="308" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_08_di" bpmnElement="Flow_08"><di:waypoint x="500" y="208" /><di:waypoint x="620" y="208" /><di:waypoint x="620" y="380" /><di:waypoint x="670" y="380" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_09_di" bpmnElement="Flow_09"><di:waypoint x="770" y="340" /><di:waypoint x="770" y="640" /><di:waypoint x="940" y="640" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_10_di" bpmnElement="Flow_10"><di:waypoint x="1140" y="640" /><di:waypoint x="1180" y="640" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_11_di" bpmnElement="Flow_11"><di:waypoint x="1390" y="640" /><di:waypoint x="1465" y="640" /><di:waypoint x="1465" y="350" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_12_di" bpmnElement="Flow_12"><di:waypoint x="870" y="380" /><di:waypoint x="1400" y="380" /><di:waypoint x="1400" y="325" /><di:waypoint x="1440" y="325" /><bpmndi:BPMNLabel><dc:Bounds x="1050" y="360" width="145" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_13_di" bpmnElement="Flow_13"><di:waypoint x="1490" y="325" /><di:waypoint x="1540" y="308" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_14_di" bpmnElement="Flow_14"><di:waypoint x="1750" y="308" /><di:waypoint x="1770" y="308" /><di:waypoint x="1770" y="500" /><di:waypoint x="1790" y="500" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_15_di" bpmnElement="Flow_15"><di:waypoint x="2010" y="500" /><di:waypoint x="2020" y="500" /><di:waypoint x="2020" y="308" /><di:waypoint x="2030" y="308" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_16_di" bpmnElement="Flow_16"><di:waypoint x="2130" y="340" /><di:waypoint x="2130" y="747" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_17_di" bpmnElement="Flow_17"><di:waypoint x="2250" y="780" /><di:waypoint x="2315" y="780" /><di:waypoint x="2315" y="350" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_18_di" bpmnElement="Flow_18"><di:waypoint x="2315" y="350" /><di:waypoint x="2315" y="1160" /><di:waypoint x="5905" y="1160" /><di:waypoint x="5905" y="1135" /><bpmndi:BPMNLabel><dc:Bounds x="2330" y="1139" width="69" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_19_di" bpmnElement="Flow_19"><di:waypoint x="2340" y="325" /><di:waypoint x="2400" y="308" /><bpmndi:BPMNLabel><dc:Bounds x="2358" y="298" width="23" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_20_di" bpmnElement="Flow_20"><di:waypoint x="2495" y="340" /><di:waypoint x="2495" y="913" /><di:waypoint x="2640" y="913" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_21_di" bpmnElement="Flow_21"><di:waypoint x="2850" y="913" /><di:waypoint x="2890" y="913" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_22_di" bpmnElement="Flow_22"><di:waypoint x="3090" y="913" /><di:waypoint x="3140" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_23_di" bpmnElement="Flow_23"><di:waypoint x="3165" y="937" /><di:waypoint x="3165" y="1150" /><di:waypoint x="5905" y="1150" /><di:waypoint x="5905" y="1135" /><bpmndi:BPMNLabel><dc:Bounds x="3180" y="1122" width="150" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_24_di" bpmnElement="Flow_24"><di:waypoint x="3190" y="912" /><di:waypoint x="3240" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="3185" y="846" width="145" height="42" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_25_di" bpmnElement="Flow_25"><di:waypoint x="3430" y="913" /><di:waypoint x="3470" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_26_di" bpmnElement="Flow_26"><di:waypoint x="3495" y="937" /><di:waypoint x="3495" y="1068" /><di:waypoint x="3540" y="1068" /><bpmndi:BPMNLabel><dc:Bounds x="3505" y="995" width="110" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_27_di" bpmnElement="Flow_27"><di:waypoint x="3520" y="912" /><di:waypoint x="3580" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="3535" y="892" width="23" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_28_di" bpmnElement="Flow_28"><di:waypoint x="3780" y="913" /><di:waypoint x="3820" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_29_di" bpmnElement="Flow_29"><di:waypoint x="3845" y="937" /><di:waypoint x="3845" y="1140" /><di:waypoint x="5905" y="1140" /><di:waypoint x="5905" y="1135" /><bpmndi:BPMNLabel><dc:Bounds x="3860" y="1119" width="77" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_30_di" bpmnElement="Flow_30"><di:waypoint x="3870" y="912" /><di:waypoint x="3930" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="3892" y="892" width="14" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_31_di" bpmnElement="Flow_31"><di:waypoint x="4140" y="913" /><di:waypoint x="4180" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_32_di" bpmnElement="Flow_32"><di:waypoint x="4205" y="937" /><di:waypoint x="4205" y="1130" /><di:waypoint x="5790" y="1130" /><bpmndi:BPMNLabel><dc:Bounds x="4220" y="1108" width="118" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_33_di" bpmnElement="Flow_33"><di:waypoint x="4230" y="912" /><di:waypoint x="4670" y="912" /><di:waypoint x="4670" y="913" /><di:waypoint x="4710" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="4412" y="892" width="70" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_34_di" bpmnElement="Flow_34"><di:waypoint x="4205" y="937" /><di:waypoint x="4205" y="1068" /><di:waypoint x="4310" y="1068" /><bpmndi:BPMNLabel><dc:Bounds x="4215" y="1035" width="93" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_35_di" bpmnElement="Flow_35"><di:waypoint x="4530" y="1068" /><di:waypoint x="4570" y="1067" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_36_di" bpmnElement="Flow_36"><di:waypoint x="4595" y="1092" /><di:waypoint x="4595" y="1120" /><di:waypoint x="5790" y="1120" /><bpmndi:BPMNLabel><dc:Bounds x="4610" y="1098" width="77" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_37_di" bpmnElement="Flow_37"><di:waypoint x="4620" y="1067" /><di:waypoint x="4655" y="1067" /><di:waypoint x="4655" y="945" /><di:waypoint x="4815" y="945" /><bpmndi:BPMNLabel><dc:Bounds x="4630" y="1047" width="14" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_38_di" bpmnElement="Flow_38"><di:waypoint x="4920" y="913" /><di:waypoint x="4960" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_39_di" bpmnElement="Flow_39"><di:waypoint x="4985" y="937" /><di:waypoint x="4985" y="1110" /><di:waypoint x="5790" y="1110" /><bpmndi:BPMNLabel><dc:Bounds x="5000" y="1082" width="141" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_40_di" bpmnElement="Flow_40"><di:waypoint x="5010" y="912" /><di:waypoint x="5070" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="4995" y="852" width="110" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_41_di" bpmnElement="Flow_41"><di:waypoint x="5270" y="913" /><di:waypoint x="5310" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_42_di" bpmnElement="Flow_42"><di:waypoint x="5335" y="937" /><di:waypoint x="5335" y="1100" /><di:waypoint x="5790" y="1100" /><bpmndi:BPMNLabel><dc:Bounds x="5350" y="1079" width="69" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_43_di" bpmnElement="Flow_43"><di:waypoint x="5360" y="912" /><di:waypoint x="5420" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="5376" y="892" width="23" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_44_di" bpmnElement="Flow_44"><di:waypoint x="5630" y="913" /><di:waypoint x="5670" y="912" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_45_di" bpmnElement="Flow_45"><di:waypoint x="5695" y="937" /><di:waypoint x="5695" y="1090" /><di:waypoint x="5790" y="1090" /><bpmndi:BPMNLabel><dc:Bounds x="5705" y="1068" width="77" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_46_di" bpmnElement="Flow_46"><di:waypoint x="5720" y="912" /><di:waypoint x="5790" y="913" /><bpmndi:BPMNLabel><dc:Bounds x="5747" y="892" width="14" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_47_di" bpmnElement="Flow_47"><di:waypoint x="6020" y="913" /><di:waypoint x="6160" y="913" /><di:waypoint x="6160" y="325" /><di:waypoint x="6200" y="325" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_48_di" bpmnElement="Flow_48"><di:waypoint x="3780" y="1068" /><di:waypoint x="3800" y="1068" /><di:waypoint x="3800" y="960" /><di:waypoint x="3680" y="960" /><di:waypoint x="3680" y="945" /><bpmndi:BPMNLabel><dc:Bounds x="3700" y="1034" width="120" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_50_di" bpmnElement="Flow_50"><di:waypoint x="6020" y="1103" /><di:waypoint x="6180" y="1103" /><di:waypoint x="6180" y="325" /><di:waypoint x="6200" y="325" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_51_di" bpmnElement="Flow_51"><di:waypoint x="6250" y="325" /><di:waypoint x="6310" y="308" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_52_di" bpmnElement="Flow_52"><di:waypoint x="6540" y="308" /><di:waypoint x="6570" y="308" /><di:waypoint x="6570" y="500" /><di:waypoint x="6600" y="500" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_53_di" bpmnElement="Flow_53"><di:waypoint x="6830" y="500" /><di:waypoint x="6840" y="500" /><di:waypoint x="6840" y="1393" /><di:waypoint x="6850" y="1393" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_54_di" bpmnElement="Flow_54"><di:waypoint x="7060" y="1393" /><di:waypoint x="7100" y="1392" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_55_di" bpmnElement="Flow_55"><di:waypoint x="7150" y="1392" /><di:waypoint x="7370" y="1387" /><bpmndi:BPMNLabel><dc:Bounds x="7251" y="1368" width="23" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_56_di" bpmnElement="Flow_56"><di:waypoint x="7125" y="1417" /><di:waypoint x="7125" y="1450" /><di:waypoint x="7220" y="1450" /><bpmndi:BPMNLabel><dc:Bounds x="7146" y="1428" width="14" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_57_di" bpmnElement="Flow_57"><di:waypoint x="7440" y="1450" /><di:waypoint x="7660" y="1450" /><di:waypoint x="7660" y="340" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_58_di" bpmnElement="Flow_58"><di:waypoint x="7550" y="308" /><di:waypoint x="7500" y="308" /><di:waypoint x="7500" y="250" /><di:waypoint x="1645" y="250" /><di:waypoint x="1645" y="275" /><bpmndi:BPMNLabel><dc:Bounds x="4660" y="229" width="180" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
