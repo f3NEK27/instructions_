@@ -1,9 +1,19 @@
 {
-  "age": 45,
-  "complaints": "Головокружение, нарушение координации",
   "diagnosis": "Инфаркт мозга",
   "icd10": "I63.5",
+  "complaints": "Головокружение, нарушение координации",
   "services": [
     "УЗИ сосудов шеи"
-  ]
+  ],
+  "lpu": {
+    "name": "Клиника №1",
+    "type": "special",
+    "color": "red"
+  },
+  "client_color": "green",
+  "program": "ДМС Стандарт",
+  "program_code": "DMS-001",
+  "gender": "male",
+  "patient_name": "Иван Иванович",
+  "risks": []
 }
